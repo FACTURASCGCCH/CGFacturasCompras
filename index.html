@@ -222,6 +222,7 @@
 
       <label>Método de pago</label>
       <select id="fMetodo">
+        <option value="">Elegí el método de pago...</option>
         <option value="Crédito">Crédito</option>
         <option value="Transferencia">Transferencia</option>
         <option value="Cheque">Cheque</option>
@@ -720,6 +721,7 @@ function llenarFormulario(data){
   document.getElementById('fMoneda').value = (data.moneda === 'USD') ? 'USD' : 'UYU';
   document.getElementById('fImporte').value = data.importe_total || '';
   document.getElementById('fSector').value = '';
+  document.getElementById('fMetodo').value = '';
   document.getElementById('fComentario').value = '';
   document.querySelectorAll('#formCard .pill').forEach(p=>p.classList.remove('selected'));
   modoDesglose = false;
@@ -745,6 +747,7 @@ async function guardarFactura(){
   if(!origen){ alert('Elegí el origen: Despensa, Hotel o BeachClub.'); return; }
   if(!proveedor){ alert('Falta el proveedor.'); return; }
   if(!importe){ alert('Falta el importe.'); return; }
+  if(!document.getElementById('fMetodo').value){ alert('Elegí el método de pago (Crédito, Transferencia, Caja Chica...).'); document.getElementById('fMetodo').focus(); return; }
   const desglose = obtenerDesglose();
   if(desglose.error){ alert(desglose.error); return; }
 
