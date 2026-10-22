@@ -337,20 +337,35 @@ async function cargarProveedores(){
   const info = document.getElementById('baseInfo');
   const scriptUrl = getScriptUrl();
   if(!scriptUrl){ info.textContent = ''; return; }
-  info.textContent = 'Cargando base de proveedores...';
+  const aplicar = lista => {
+    PROVEEDORES = lista.map(p=>p.nombre);
+    METODO_ACORDADO = {};
+    lista.forEach(p=>{ if(p.metodo) METODO_ACORDADO[p.nombre] = p.metodo; });
+    PROVEEDORES_NORM = PROVEEDORES.map(p => ({ original: p, norm: normalizarNombre(p) }));
+    poblarDatalist();
+  };
+  // Copia guardada en este dispositivo: la página queda lista al instante
+  const CK = 'cache_prov_' + location.pathname;
+  let copia = null;
+  try{ copia = JSON.parse(localStorage.getItem(CK) || 'null'); }catch(e){ copia = null; }
+  if(copia && copia.lista && copia.lista.length){
+    aplicar(copia.lista);
+    info.textContent = `Base de proveedores: ${PROVEEDORES.length} (actualizando...)`;
+  } else {
+    info.textContent = 'Cargando base de proveedores...';
+  }
   try{
     const resp = await fetch(scriptUrl + '?accion=proveedores');
     const result = await resp.json();
     if(!result.ok || !result.proveedores || !result.proveedores.length) throw new Error(result.error || 'lista vacía');
-    PROVEEDORES = result.proveedores.map(p=>p.nombre);
-    METODO_ACORDADO = {};
-    result.proveedores.forEach(p=>{ if(p.metodo) METODO_ACORDADO[p.nombre] = p.metodo; });
-    PROVEEDORES_NORM = PROVEEDORES.map(p => ({ original: p, norm: normalizarNombre(p) }));
-    poblarDatalist();
+    aplicar(result.proveedores);
+    try{ localStorage.setItem(CK, JSON.stringify({ t: Date.now(), lista: result.proveedores })); }catch(e){}
     info.textContent = `Base de proveedores: ${PROVEEDORES.length} (actualizada)`;
   }catch(err){
-    console.warn('No se pudo leer la base central, uso la lista de respaldo.', err);
-    info.textContent = `Base de proveedores: ${PROVEEDORES.length} (lista de respaldo — no se pudo leer la base central)`;
+    console.warn('No se pudo leer la base central.', err);
+    info.textContent = (copia && copia.lista && copia.lista.length)
+      ? `Base de proveedores: ${PROVEEDORES.length} (copia guardada en este dispositivo)`
+      : `Base de proveedores: ${PROVEEDORES.length} (lista de respaldo — no se pudo leer la base central)`;
   }
 }
 
@@ -516,11 +531,14 @@ function obtenerDesglose(){
 async function cargarRubros(){
   const scriptUrl = getScriptUrl();
   if(!scriptUrl) return;
+  const CK = 'cache_rub_' + location.pathname;
+  try{ const c = JSON.parse(localStorage.getItem(CK) || 'null'); if(c && Object.keys(c).length){ RUBROS = c; refrescarRubros(); } }catch(e){}
   try{
     const resp = await fetch(scriptUrl + '?accion=rubros');
     const result = await resp.json();
     if(result.ok && result.rubros && Object.keys(result.rubros).length){
       RUBROS = result.rubros;
+      try{ localStorage.setItem(CK, JSON.stringify(result.rubros)); }catch(e){}
       refrescarRubros();
     }
   }catch(err){
@@ -567,13 +585,13 @@ function cerrarCamara(){
 async function capturarFoto(){
   const video = document.getElementById('video');
   const canvas = document.getElementById('canvas');
-  const maxDim = 1400;
+  const maxDim = 1280;
   let w = video.videoWidth, h = video.videoHeight;
   if(w > h && w > maxDim){ h = Math.round(h * maxDim/w); w = maxDim; }
   else if(h > maxDim){ w = Math.round(w * maxDim/h); h = maxDim; }
   canvas.width = w; canvas.height = h;
   canvas.getContext('2d').drawImage(video, 0, 0, w, h);
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
   cerrarCamara();
   await procesarImagen(dataUrl.split(',')[1], 'image/jpeg', 'Foto tomada con cámara');
 }
@@ -600,7 +618,7 @@ function selectPill(el, group){
 document.getElementById('fileInput').addEventListener('change', async (e)=>{
   const file = e.target.files[0];
   if(!file) return;
-  const resized = await resizeImage(file, 1400);
+  const resized = await resizeImage(file, 1280);
   await procesarImagen(resized.base64, resized.mediaType, file.name || 'Foto elegida');
 });
 
@@ -640,7 +658,7 @@ function resizeImage(file, maxDim){
       const canvas = document.createElement('canvas');
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
       resolve({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
     };
     img.onerror = reject;
@@ -764,7 +782,9 @@ async function guardarFactura(){
       alert(`Factura guardada.\n\nEl proveedor "${proveedor}" no estaba en la base: quedó registrado como PENDIENTE para revisión de administración.`);
     }
     resetForm();
-    showTab('lista');
+    document.getElementById('statusWrap').innerHTML =
+      `<div class="status ok">✓ Factura guardada: ${escapeHtml(proveedor)} · ${registro.moneda} ${Number(registro.importe).toLocaleString('es-UY',{minimumFractionDigits:2})}. Ya podés cargar la siguiente.</div>`;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }catch(err){
     console.error(err);
     alert('No se pudo guardar: ' + err.message);
