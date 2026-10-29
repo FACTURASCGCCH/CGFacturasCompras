@@ -108,6 +108,9 @@
   .desg-resumen{font-size:13px; padding:9px 11px; border-radius:9px; margin-top:8px;}
   .desg-resumen.ok{background:var(--ok-bg); color:var(--ok-ink);}
   .desg-resumen.warn{background:var(--warn-bg); color:var(--warn-ink);}
+  .modal{position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:flex-start; justify-content:center; padding:28px 12px; z-index:50; overflow:auto;}
+  .modal-card{max-width:560px; width:100%;}
+  .btn-edit{color:var(--forest); cursor:pointer; font-size:12px; font-weight:600; background:none; border:none; padding:0; display:block; margin-bottom:6px;}
   .rubro-mini{font-size:11px; color:var(--muted); margin-top:2px;}
   .del{color:var(--clay); cursor:pointer; font-size:12px; font-weight:600; background:none; border:none; padding:0;}
   .empty{text-align:center; color:var(--muted); padding:30px 10px; font-size:13.5px;}
@@ -236,6 +239,22 @@
 
       <button class="btn btn-primary" id="btnGuardar" onclick="guardarFactura()">Guardar factura</button>
       <button class="btn btn-secondary" onclick="resetForm()">Cancelar</button>
+    </div>
+  </div>
+
+  <!-- ===== EDITAR IMPUTACIÓN ===== -->
+  <div id="editModal" class="modal" style="display:none;">
+    <div class="card modal-card">
+      <div style="font-size:18px; font-weight:700; margin-bottom:4px;">Editar imputación</div>
+      <div id="editInfo" style="font-size:13px; color:var(--muted); margin-bottom:10px;"></div>
+      <div class="desg-fila" style="margin-top:2px; font-size:11px; color:var(--muted); font-weight:600;"><span>Rubro del P&amp;L</span><span>Importe</span><span>%</span><span></span></div>
+      <div id="editFilas"></div>
+      <div class="desg-acciones">
+        <button type="button" class="linkbtn" onclick="editAgregarFila()">+ Agregar rubro</button>
+      </div>
+      <div id="editResumen" class="desg-resumen"></div>
+      <button class="btn btn-primary" id="btnEditGuardar" onclick="guardarEdicion()">Guardar imputación</button>
+      <button class="btn btn-secondary" onclick="cerrarEdicion()">Cancelar</button>
     </div>
   </div>
 
@@ -818,6 +837,7 @@ async function renderLista(){
   const filtro = document.getElementById('filtroOrigen').value;
   if(filtro) regs = regs.filter(r=>r.origen===filtro);
 
+  REGS_LISTA = regs;
   document.getElementById('countLbl').textContent = `${regs.length} factura(s) cargada(s)`;
 
   if(regs.length===0){
@@ -835,7 +855,7 @@ async function renderLista(){
       <td>${escapeHtml(r.numero||'—')}</td>
       <td class="num">${r.moneda} ${Number(r.importe).toLocaleString('es-UY',{minimumFractionDigits:2})}</td>
       <td>${escapeHtml(r.metodo||'—')}</td>
-      <td><button class="del" onclick="borrarFactura('${r.id}')">Borrar</button></td>
+      <td><button class="btn-edit" onclick="abrirEdicion('${r.id}')">✏️ Imputación</button><button class="del" onclick="borrarFactura('${r.id}')">Borrar</button></td>
     </tr>
   `).join('');
 }
@@ -843,6 +863,116 @@ async function renderLista(){
 function escapeHtml(s){
   if(s===undefined || s===null) return '';
   return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ===================== EDITAR IMPUTACIÓN (solo rubros del P&L) =====================
+let REGS_LISTA = [];
+let EDIT = null;
+
+async function abrirEdicion(id){
+  const r = REGS_LISTA.find(x => x.id === id);
+  if(!r) return;
+  EDIT = { r, total: Number(r.importe) || 0 };
+  document.getElementById('editInfo').textContent =
+    `${r.proveedor} · N° ${r.numero || '—'} · ${r.fecha || '—'} · ${r.origen} · ${r.moneda} ${fmtMonto(EDIT.total)}`;
+  document.getElementById('editFilas').innerHTML = '';
+  document.getElementById('editResumen').className = 'desg-resumen';
+  document.getElementById('editResumen').textContent = 'Cargando la imputación actual...';
+  document.getElementById('editModal').style.display = 'flex';
+  let items = [];
+  try{
+    const resp = await fetch(getScriptUrl() + '?accion=desglose&id=' + encodeURIComponent(id));
+    const result = await resp.json();
+    if(result.ok && result.items) items = result.items;
+  }catch(e){ console.warn(e); }
+  if(!items.length && r.rubro && !String(r.rubro).startsWith('DESGLOSADO')) items = [{ rubro: r.rubro, importe: EDIT.total }];
+  if(!items.length) items = [{ rubro: '', importe: EDIT.total }];
+  items.forEach(it => editAgregarFila(it.rubro, it.importe));
+  editResumen();
+}
+
+function cerrarEdicion(){
+  document.getElementById('editModal').style.display = 'none';
+  EDIT = null;
+}
+
+function editOpciones(sel){
+  const lista = ((RUBROS[EDIT.r.origen]) || []).slice();
+  if(sel && !lista.includes(sel)) lista.unshift(sel);
+  return '<option value="">Elegí rubro...</option>' +
+    lista.map(x => `<option value="${escapeHtml(x)}"${x===sel?' selected':''}>${escapeHtml(x)}</option>`).join('');
+}
+
+function editAgregarFila(rubro, importe){
+  if(!EDIT) return;
+  const div = document.createElement('div');
+  div.className = 'desg-fila';
+  div.innerHTML = `<select class="e-rubro">${editOpciones(rubro || '')}</select>
+    <input type="number" step="0.01" class="e-imp" placeholder="$">
+    <input type="number" step="0.01" class="e-pct" placeholder="%">
+    <button type="button" class="d-del" title="Quitar">✕</button>`;
+  const imp = div.querySelector('.e-imp'), pct = div.querySelector('.e-pct');
+  const t = EDIT.total;
+  if(importe){ imp.value = (Math.round(importe*100)/100).toFixed(2); pct.value = t ? Math.round(importe/t*10000)/100 : ''; }
+  imp.addEventListener('input', ()=>{ pct.value = (t && imp.value) ? Math.round(parseFloat(imp.value)/t*10000)/100 : ''; editResumen(); });
+  pct.addEventListener('input', ()=>{ imp.value = (t && pct.value) ? (Math.round(t*parseFloat(pct.value))/100).toFixed(2) : ''; editResumen(); });
+  div.querySelector('.e-rubro').addEventListener('change', editResumen);
+  div.querySelector('.d-del').addEventListener('click', ()=>{ div.remove(); editResumen(); });
+  document.getElementById('editFilas').appendChild(div);
+  editResumen();
+}
+
+function editSuma(){
+  let s = 0;
+  document.querySelectorAll('#editFilas .e-imp').forEach(i => { s += parseFloat(i.value) || 0; });
+  return Math.round(s*100)/100;
+}
+
+function editResumen(){
+  if(!EDIT) return;
+  const box = document.getElementById('editResumen');
+  const t = EDIT.total, s = editSuma(), falta = Math.round((t - s)*100)/100;
+  if(Math.abs(falta) < 0.01){ box.className = 'desg-resumen ok'; box.textContent = `✓ Repartido el total: ${fmtMonto(t)}`; }
+  else if(falta > 0){ box.className = 'desg-resumen warn'; box.innerHTML = `Asignado ${fmtMonto(s)} de ${fmtMonto(t)} · <b>Falta ${fmtMonto(falta)}</b> <button type="button" class="linkbtn" onclick="editCompletarResto()">Poner el resto en la última línea</button>`; }
+  else { box.className = 'desg-resumen warn'; box.innerHTML = `Asignado ${fmtMonto(s)} de ${fmtMonto(t)} · <b>Te pasaste por ${fmtMonto(-falta)}</b>`; }
+}
+
+function editCompletarResto(){
+  const imps = [...document.querySelectorAll('#editFilas .e-imp')];
+  if(!imps.length) return;
+  const falta = Math.round((EDIT.total - editSuma())*100)/100;
+  const ultima = imps.find(i => !i.value) || imps[imps.length-1];
+  ultima.value = ((parseFloat(ultima.value)||0) + falta).toFixed(2);
+  ultima.dispatchEvent(new Event('input'));
+}
+
+async function guardarEdicion(){
+  if(!EDIT) return;
+  const items = [];
+  for(const f of document.querySelectorAll('#editFilas .desg-fila')){
+    const rubro = f.querySelector('.e-rubro').value;
+    const importe = parseFloat(f.querySelector('.e-imp').value) || 0;
+    if(!rubro && !importe) continue;
+    if(!rubro){ alert('Hay una línea sin rubro.'); return; }
+    if(importe <= 0){ alert(`Falta el importe de "${rubro}".`); return; }
+    if(items.some(x => x.rubro === rubro)){ alert(`El rubro "${rubro}" está repetido: juntalo en una sola línea.`); return; }
+    items.push({ rubro, importe: Math.round(importe*100)/100 });
+  }
+  if(!items.length){ alert('Elegí al menos un rubro.'); return; }
+  const s = Math.round(items.reduce((a,x)=>a+x.importe,0)*100)/100;
+  if(Math.abs(s - EDIT.total) >= 0.01){ alert(`El desglose suma ${fmtMonto(s)} y la factura es de ${fmtMonto(EDIT.total)}. Tienen que coincidir.`); return; }
+  const btn = document.getElementById('btnEditGuardar');
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  try{
+    const resp = await fetch(getScriptUrl(), { method:'POST', body: JSON.stringify({ accion:'editarImputacion', id: EDIT.r.id, desglose: items }) });
+    const result = await resp.json();
+    if(!result.ok) throw new Error(result.error || 'Error al guardar');
+    cerrarEdicion();
+    renderLista();
+  }catch(err){
+    alert('No se pudo guardar la imputación: ' + err.message);
+  }
+  btn.disabled = false; btn.textContent = 'Guardar imputación';
 }
 
 async function borrarFactura(id){
