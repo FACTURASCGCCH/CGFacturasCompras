@@ -173,11 +173,12 @@
       </div>
 
       <label>Proveedor</label>
-      <input type="text" id="fProveedor" list="proveedoresList" placeholder="Nombre del proveedor" oninput="mostrarMetodoAcordado()">
+      <input type="text" id="fProveedor" list="proveedoresList" placeholder="Nombre del proveedor" oninput="mostrarMetodoAcordado()" onchange="cruzarRutConBase('nombre')">
       <div id="metodoHint" class="sub" style="margin-top:4px;"></div>
 
       <label>RUT del proveedor</label>
-      <input type="text" id="fRut" placeholder="000000000000">
+      <input type="text" id="fRut" placeholder="000000000000" onchange="cruzarRutConBase('manual')">
+      <div id="rutHint" class="sub" style="margin-top:4px;"></div>
       <datalist id="proveedoresList"></datalist>
 
       <div class="row2">
@@ -313,6 +314,105 @@ function distanciaLevenshtein(a, b){
 
 let PROVEEDORES_NORM = PROVEEDORES.map(p => ({ original: p, norm: normalizarNombre(p) }));
 
+// ---- Cruce de RUT con el Maestro de proveedores ----
+// RUT del propio hotel (comprador): nunca puede ser el RUT del proveedor.
+const RUT_PROPIO = '218100680017';
+const NOMBRE_HOTEL = 'Casa Grande';
+let RUT_POR_NOMBRE = {};   // nombre normalizado -> RUT (12 dígitos)
+let NOMBRE_POR_RUT = {};   // RUT -> nombre en la base
+let rutDeshacer = null;    // para el botón "Deshacer"
+
+function rut12(s){
+  const d = String(s || '').replace(/\D/g, '');
+  return (d.length >= 9 && d.length <= 12) ? d.padStart(12, '0') : d;
+}
+// Dígito verificador del RUT uruguayo
+function rutValido(r){
+  if(!/^\d{12}$/.test(r)) return false;
+  const w = [4,3,2,9,8,7,6,5,4,3,2];
+  let s = 0; for(let i=0;i<11;i++) s += w[i] * +r[i];
+  let dv = 11 - (s % 11); if(dv === 11) dv = 0; if(dv === 10) return false;
+  return dv === +r[11];
+}
+function armarIndicesRut(lista){
+  RUT_POR_NOMBRE = {}; NOMBRE_POR_RUT = {};
+  (lista || []).forEach(p => {
+    const r = rut12(p.rut);
+    if(!rutValido(r) || r === RUT_PROPIO) return;
+    const k = normalizarNombre(p.nombre);
+    if(k && !RUT_POR_NOMBRE[k]) RUT_POR_NOMBRE[k] = r;
+    if(!NOMBRE_POR_RUT[r]) NOMBRE_POR_RUT[r] = p.nombre;
+  });
+}
+
+// modo: 'foto' (recién leída), 'nombre' (eligieron proveedor), 'manual' (escribieron el RUT)
+function cruzarRutConBase(modo){
+  const fP = document.getElementById('fProveedor');
+  const fR = document.getElementById('fRut');
+  const hint = document.getElementById('rutHint');
+  if(!fP || !fR || !hint) return;
+  hint.innerHTML = '';
+  const nombre = fP.value.trim();
+  const leido = rut12(fR.value);
+  const rutBase = RUT_POR_NOMBRE[normalizarNombre(nombre)];
+  const deshacer = (campo, valor) => {
+    rutDeshacer = { campo, valor };
+    return ` <button type="button" style="border:none;background:none;color:var(--forest);text-decoration:underline;cursor:pointer;font-size:12.5px;" onclick="deshacerCruceRut()">Deshacer</button>`;
+  };
+  const ok = t => `<span style="color:var(--forest); font-weight:600;">${t}</span>`;
+  const warn = t => `<span style="color:var(--warn-ink); font-weight:600;">${t}</span>`;
+
+  // A) El proveedor está en la base: manda el RUT de la base
+  if(rutBase){
+    if(leido === rutBase) return;
+    if(modo === 'manual'){
+      hint.innerHTML = warn(`⚠️ En la base, ${escapeHtml(nombre)} tiene RUT ${rutBase}.`) +
+        ` <button type="button" style="border:none;background:none;color:var(--forest);text-decoration:underline;cursor:pointer;font-size:12.5px;" onclick="document.getElementById('fRut').value='${rutBase}'; cruzarRutConBase('nombre');">Usar el de la base</button>`;
+      return;
+    }
+    const antes = fR.value;
+    fR.value = rutBase;
+    let txt = antes
+      ? `🔄 RUT corregido según la base de proveedores (la foto decía ${escapeHtml(antes)})`
+      : `🔄 RUT completado desde la base de proveedores`;
+    const otro = NOMBRE_POR_RUT[leido];
+    if(otro && normalizarNombre(otro) !== normalizarNombre(nombre)){
+      txt += ` — ojo: ese RUT es de "${escapeHtml(otro)}", revisá que el proveedor sea el correcto`;
+    }
+    hint.innerHTML = ok(txt) + deshacer('rut', antes);
+    return;
+  }
+
+  // B) El nombre no está en la base pero el RUT sí: se usa el nombre de la base
+  if(leido && NOMBRE_POR_RUT[leido]){
+    const nombreBase = NOMBRE_POR_RUT[leido];
+    if(modo === 'nombre' && nombre){
+      hint.innerHTML = warn(`⚠️ Ese RUT corresponde a "${escapeHtml(nombreBase)}" en la base.`);
+      return;
+    }
+    fP.value = nombreBase;
+    mostrarMetodoAcordado();
+    hint.innerHTML = ok(`🔄 Proveedor identificado por RUT: "${escapeHtml(nombreBase)}"` +
+      (nombre ? ` (la foto decía "${escapeHtml(nombre)}")` : '')) + deshacer('proveedor', nombre);
+    return;
+  }
+
+  // C) Controles cuando no hay coincidencia en la base
+  if(leido && leido === RUT_PROPIO){
+    hint.innerHTML = warn(`⚠️ Ese es el RUT de ${NOMBRE_HOTEL} (el comprador). Poné el RUT del proveedor que figura arriba en la factura.`);
+  } else if(leido && !rutValido(leido)){
+    hint.innerHTML = warn(`⚠️ El RUT no es válido (son 12 dígitos y el último es de control). Revisalo contra la factura.`);
+  }
+}
+
+function deshacerCruceRut(){
+  if(!rutDeshacer) return;
+  if(rutDeshacer.campo === 'rut') document.getElementById('fRut').value = rutDeshacer.valor;
+  else { document.getElementById('fProveedor').value = rutDeshacer.valor; mostrarMetodoAcordado(); }
+  rutDeshacer = null;
+  document.getElementById('rutHint').innerHTML = '';
+}
+
 function mostrarMetodoAcordado(){
   const nombreCrudo = document.getElementById('fProveedor').value.trim();
   const hint = document.getElementById('metodoHint');
@@ -333,7 +433,7 @@ function mostrarMetodoAcordado(){
       }
       const umbral = Math.max(2, Math.floor(norm.length * 0.3));
       if(mejor && mejorDist <= umbral){
-        hint.innerHTML = `${hintTexto}<span style="color:var(--warn-ink); font-weight:600;">⚠️ No está exacto en la base — ¿quisiste decir "${escapeHtml(mejor.original)}"?</span> <button type="button" style="border:none;background:none;color:var(--forest);text-decoration:underline;cursor:pointer;font-size:12.5px;" onclick="document.getElementById('fProveedor').value='${mejor.original.replace(/'/g,"\\'")}'; mostrarMetodoAcordado();">Usar este</button>`;
+        hint.innerHTML = `${hintTexto}<span style="color:var(--warn-ink); font-weight:600;">⚠️ No está exacto en la base — ¿quisiste decir "${escapeHtml(mejor.original)}"?</span> <button type="button" style="border:none;background:none;color:var(--forest);text-decoration:underline;cursor:pointer;font-size:12.5px;" onclick="document.getElementById('fProveedor').value='${mejor.original.replace(/'/g,"\\'")}'; mostrarMetodoAcordado(); cruzarRutConBase('nombre');">Usar este</button>`;
         return;
       } else {
         hintTexto += `⚠️ Este proveedor no está en la base — revisá que el nombre esté bien escrito. Si es nuevo, al guardar queda registrado para revisión de administración.`;
@@ -353,6 +453,14 @@ function poblarDatalist(){
 poblarDatalist();
 
 // Lee la base central de proveedores (Google Sheets) a través del Apps Script
+// Lee la respuesta del script. Si no es JSON (URL equivocada, script sin permisos,
+// implementación archivada...) da un mensaje entendible en lugar del error de Safari.
+async function leerJSON(resp){
+  const txt = await resp.text();
+  try { return JSON.parse(txt); }
+  catch(e){ throw new Error('El script no respondió bien. Revisá en ⚙️ Configuración que la URL sea la del script (empieza con https://script.google.com/ y termina en /exec). Si está bien, avisá a administración.'); }
+}
+
 async function cargarProveedores(){
   const info = document.getElementById('baseInfo');
   const scriptUrl = getScriptUrl();
@@ -362,6 +470,7 @@ async function cargarProveedores(){
     METODO_ACORDADO = {};
     lista.forEach(p=>{ if(p.metodo) METODO_ACORDADO[p.nombre] = p.metodo; });
     PROVEEDORES_NORM = PROVEEDORES.map(p => ({ original: p, norm: normalizarNombre(p) }));
+    armarIndicesRut(lista);
     poblarDatalist();
   };
   // Copia guardada en este dispositivo: la página queda lista al instante
@@ -376,7 +485,7 @@ async function cargarProveedores(){
   }
   try{
     const resp = await fetch(scriptUrl + '?accion=proveedores');
-    const result = await resp.json();
+    const result = await leerJSON(resp);
     if(!result.ok || !result.proveedores || !result.proveedores.length) throw new Error(result.error || 'lista vacía');
     aplicar(result.proveedores);
     try{ localStorage.setItem(CK, JSON.stringify({ t: Date.now(), lista: result.proveedores })); }catch(e){}
@@ -403,9 +512,24 @@ function cargarConfigGuardada(){
   document.getElementById('cfgScriptUrl').value = localStorage.getItem('script_url') || '';
 }
 
+// La URL del script tiene que ser la de Google Apps Script (termina en /exec),
+// no la dirección de esta página.
+function urlScriptValida(u){
+  return /^https:\/\/script\.google\.com\/(a\/[^\/\s]+\/)?macros\/s\/[A-Za-z0-9_\-]+\/exec$/.test(u || '');
+}
+
 function guardarConfig(){
-  localStorage.setItem('gemini_api_key', document.getElementById('cfgApiKey').value.trim());
-  localStorage.setItem('script_url', document.getElementById('cfgScriptUrl').value.trim());
+  const clave = document.getElementById('cfgApiKey').value.trim();
+  const url = document.getElementById('cfgScriptUrl').value.replace(/\s+/g, '');
+  if(!clave){ alert('Falta la clave de API de Gemini.'); return; }
+  if(!urlScriptValida(url)){
+    alert('La URL del script no es correcta.\n\nTiene que empezar con https://script.google.com/macros/s/ y terminar en /exec.\n\nOjo: no es la dirección de esta página (github.io).');
+    document.getElementById('cfgScriptUrl').focus();
+    return;
+  }
+  document.getElementById('cfgScriptUrl').value = url;
+  localStorage.setItem('gemini_api_key', clave);
+  localStorage.setItem('script_url', url);
   toggleConfig();
   alert('Configuración guardada en este dispositivo.');
   cargarProveedores();
@@ -555,7 +679,7 @@ async function cargarRubros(){
   try{ const c = JSON.parse(localStorage.getItem(CK) || 'null'); if(c && Object.keys(c).length){ RUBROS = c; refrescarRubros(); } }catch(e){}
   try{
     const resp = await fetch(scriptUrl + '?accion=rubros');
-    const result = await resp.json();
+    const result = await leerJSON(resp);
     if(result.ok && result.rubros && Object.keys(result.rubros).length){
       RUBROS = result.rubros;
       try{ localStorage.setItem(CK, JSON.stringify(result.rubros)); }catch(e){}
@@ -573,6 +697,10 @@ document.getElementById('fImporte').addEventListener('input', ()=>{
 
 cargarConfigGuardada();
 if(!getApiKey() || !getScriptUrl()){ document.getElementById('configCard').style.display = 'block'; }
+else if(!urlScriptValida(getScriptUrl())){
+  document.getElementById('configCard').style.display = 'block';
+  setTimeout(()=>alert('La URL del script guardada en este dispositivo no es correcta.\n\nEn Configuración, pegá la URL que empieza con https://script.google.com/macros/s/ y termina en /exec, y tocá Guardar.'), 300);
+}
 cargarProveedores();
 cargarRubros();
 
@@ -690,7 +818,7 @@ async function leerFactura(base64, mediaType){
   const prompt = `Esta imagen es una factura uruguaya (e-Factura o factura común). Extraé estos datos y respondé SOLO con un objeto JSON, sin texto adicional, sin backticks de markdown:
 {
   "proveedor": "razón social del EMISOR de la factura tal cual figura impresa",
-  "rut": "RUT del EMISOR (11 dígitos, con o sin puntos, tal cual figura impreso)",
+  "rut": "RUT del EMISOR: 12 dígitos, solo números. Es el RUT de quien VENDE (arriba, junto al nombre del emisor). NUNCA el RUT COMPRADOR / RECEPTOR / CLIENTE",
   "numero_factura": "número de factura, solo dígitos si es posible",
   "fecha": "fecha de emisión en formato AAAA-MM-DD",
   "moneda": "UYU o USD",
@@ -735,6 +863,7 @@ function llenarFormulario(data){
   document.getElementById('fProveedor').value = data.proveedor || '';
   mostrarMetodoAcordado();
   document.getElementById('fRut').value = data.rut || '';
+  cruzarRutConBase('foto');
   document.getElementById('fNumero').value = data.numero_factura || '';
   document.getElementById('fFecha').value = data.fecha || '';
   document.getElementById('fMoneda').value = (data.moneda === 'USD') ? 'USD' : 'UYU';
@@ -798,7 +927,7 @@ async function guardarFactura(){
       method: 'POST',
       body: JSON.stringify({ accion: 'guardar', registro })
     });
-    const result = await resp.json();
+    const result = await leerJSON(resp);
     if(!result.ok) throw new Error(result.error || 'Error al guardar');
     if(result.proveedorNuevo){
       alert(`Factura guardada.\n\nEl proveedor "${proveedor}" no estaba en la base: quedó registrado como PENDIENTE para revisión de administración.`);
@@ -819,7 +948,7 @@ async function cargarTodas(){
     const scriptUrl = getScriptUrl();
     if(!scriptUrl) return [];
     const resp = await fetch(scriptUrl + '?accion=listar');
-    const result = await resp.json();
+    const result = await leerJSON(resp);
     if(!result.ok) return [];
     const regs = result.registros || [];
     regs.sort((a,b)=> (b.fecha||'').localeCompare(a.fecha||''));
@@ -882,7 +1011,7 @@ async function abrirEdicion(id){
   let items = [];
   try{
     const resp = await fetch(getScriptUrl() + '?accion=desglose&id=' + encodeURIComponent(id));
-    const result = await resp.json();
+    const result = await leerJSON(resp);
     if(result.ok && result.items) items = result.items;
   }catch(e){ console.warn(e); }
   if(!items.length && r.rubro && !String(r.rubro).startsWith('DESGLOSADO')) items = [{ rubro: r.rubro, importe: EDIT.total }];
@@ -965,7 +1094,7 @@ async function guardarEdicion(){
   btn.disabled = true; btn.textContent = 'Guardando...';
   try{
     const resp = await fetch(getScriptUrl(), { method:'POST', body: JSON.stringify({ accion:'editarImputacion', id: EDIT.r.id, desglose: items }) });
-    const result = await resp.json();
+    const result = await leerJSON(resp);
     if(!result.ok) throw new Error(result.error || 'Error al guardar');
     cerrarEdicion();
     renderLista();
