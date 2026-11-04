@@ -188,7 +188,8 @@
         </div>
         <div>
           <label>Fecha de factura</label>
-          <input type="date" id="fFecha">
+          <input type="date" id="fFecha" onchange="mostrarAvisoFecha()">
+          <div id="fechaHint" class="sub" style="margin-top:4px;"></div>
         </div>
       </div>
 
@@ -820,7 +821,7 @@ async function leerFactura(base64, mediaType){
   "proveedor": "razón social del EMISOR de la factura tal cual figura impresa",
   "rut": "RUT del EMISOR: 12 dígitos, solo números. Es el RUT de quien VENDE (arriba, junto al nombre del emisor). NUNCA el RUT COMPRADOR / RECEPTOR / CLIENTE",
   "numero_factura": "número de factura, solo dígitos si es posible",
-  "fecha": "fecha de emisión en formato AAAA-MM-DD",
+  "fecha": "fecha de emisión en formato AAAA-MM-DD (las facturas son recientes: el año actual es ${new Date().getFullYear()}; mirá bien el año impreso)",
   "moneda": "UYU o USD",
   "importe_total": numero decimal del monto total de la factura, sin símbolo de moneda ni separador de miles
 }
@@ -866,6 +867,7 @@ function llenarFormulario(data){
   cruzarRutConBase('foto');
   document.getElementById('fNumero').value = data.numero_factura || '';
   document.getElementById('fFecha').value = data.fecha || '';
+  mostrarAvisoFecha();
   document.getElementById('fMoneda').value = (data.moneda === 'USD') ? 'USD' : 'UYU';
   document.getElementById('fImporte').value = data.importe_total || '';
   document.getElementById('fSector').value = '';
@@ -886,6 +888,25 @@ function resetForm(){
   document.getElementById('fileInput').value = '';
 }
 
+// ---- Control de fecha: avisa si no es del mes actual o del anterior ----
+function controlarFecha(v){
+  if(!v) return '';
+  const d = new Date(v + 'T12:00:00');
+  if(isNaN(d)) return '';
+  const hoy = new Date();
+  const txt = d.toLocaleDateString('es-UY');
+  if(d.getTime() > hoy.getTime() + 2*86400000) return `La fecha de la factura (${txt}) es posterior a hoy.`;
+  const meses = (hoy.getFullYear() - d.getFullYear())*12 + (hoy.getMonth() - d.getMonth());
+  if(meses > 1) return `La fecha de la factura (${txt}) no es de este mes ni del anterior.`;
+  return '';
+}
+function mostrarAvisoFecha(){
+  const el = document.getElementById('fechaHint');
+  if(!el) return;
+  const msg = controlarFecha(document.getElementById('fFecha').value);
+  el.innerHTML = msg ? `<span style="color:var(--warn-ink); font-weight:600;">⚠️ ${msg} Revisá el año contra la factura.</span>` : '';
+}
+
 async function guardarFactura(){
   const origenPill = document.querySelector('#formCard .pill.selected');
   const origen = origenPill ? origenPill.dataset.val : null;
@@ -898,6 +919,9 @@ async function guardarFactura(){
   if(!document.getElementById('fMetodo').value){ alert('Elegí el método de pago (Crédito, Transferencia, Caja Chica...).'); document.getElementById('fMetodo').focus(); return; }
   const desglose = obtenerDesglose();
   if(desglose.error){ alert(desglose.error); return; }
+
+  const avisoFecha = controlarFecha(document.getElementById('fFecha').value);
+  if(avisoFecha && !confirm(avisoFecha + '\n\n¿La fecha está bien? Tocá Cancelar para corregirla.')){ document.getElementById('fFecha').focus(); return; }
 
   const btn = document.getElementById('btnGuardar');
   btn.disabled = true; btn.textContent = 'Guardando...';
@@ -923,11 +947,19 @@ async function guardarFactura(){
   try{
     const scriptUrl = getScriptUrl();
     if(!scriptUrl) throw new Error('Falta configurar la URL del Web App.');
-    const resp = await fetch(scriptUrl, {
+    let result = await leerJSON(await fetch(scriptUrl, {
       method: 'POST',
       body: JSON.stringify({ accion: 'guardar', registro })
-    });
-    const result = await leerJSON(resp);
+    }));
+    if(!result.ok && result.duplicado){
+      const d = result.detalle || {};
+      const seguir = confirm(`⚠️ Esta factura ya está cargada.\n\n${d.proveedor || ''} · N° ${registro.numero}\nCargada el ${d.cargada || ''} por ${d.moneda || ''} ${d.importe ?? ''}\n\nNo la cargues de nuevo salvo que sea otra factura distinta.\n¿Guardarla igual?`);
+      if(!seguir){ btn.disabled = false; btn.textContent = 'Guardar factura'; return; }
+      result = await leerJSON(await fetch(scriptUrl, {
+        method: 'POST',
+        body: JSON.stringify({ accion: 'guardar', registro, forzar: true })
+      }));
+    }
     if(!result.ok) throw new Error(result.error || 'Error al guardar');
     if(result.proveedorNuevo){
       alert(`Factura guardada.\n\nEl proveedor "${proveedor}" no estaba en la base: quedó registrado como PENDIENTE para revisión de administración.`);
